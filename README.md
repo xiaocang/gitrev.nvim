@@ -15,9 +15,8 @@ lazy.nvim:
 ```lua
 {
   "xiaocang/gitrev.nvim",
-  config = function()
-    require("gitrev").setup()
-  end,
+  dependencies = { "airblade/vim-gitgutter", "tpope/vim-fugitive" },
+  config = true,
 }
 ```
 
