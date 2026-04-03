@@ -6,7 +6,7 @@ A lightweight Neovim plugin for reviewing Git changes. Sets a "review base" ref 
 
 - [vim-gitgutter](https://github.com/airblade/vim-gitgutter) or [vim-signify](https://github.com/mhinz/vim-signify) — gutter signs and hunk jumps against review base
 - [vim-fugitive](https://github.com/tpope/vim-fugitive) — `:RevDiff` uses `Gdiffsplit`
-- [gh CLI](https://cli.github.com/) — `:RevPR` uses `gh pr view`
+- [gh CLI](https://cli.github.com/) — `:RevPR` uses `gh pr view` and `gh repo view`
 
 ## Installation
 
@@ -28,7 +28,7 @@ lazy.nvim:
 | Command | Description |
 |---------|-------------|
 | `:RevBase [ref]` | Set the review base to `ref`. No argument resets to HEAD. |
-| `:RevPR [pr]` | Set the review base to the merge-base of the current (or specified) PR. |
+| `:RevPR [pr]` | Set the review base to the merge-base of the current (or specified) PR resolved from GitHub metadata. |
 | `:RevDiff` | Open a diff split against the review base (uses fugitive). |
 | `:RevFiles` | Populate the quickfix list with files changed since the review base. |
 
@@ -55,6 +55,8 @@ lazy.nvim:
 ```
 
 If your gutter plugin owns `]c` / `[c`, those hunk jumps will follow the current review base as well.
+
+When the PR base commit is not available locally, `:RevPR` will fetch just that base branch from the matching GitHub remote before computing the merge-base.
 
 ## Uninstall
 

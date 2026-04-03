@@ -11,6 +11,36 @@ local function command_exists(name)
   return vim.fn.exists(":" .. name) == 2
 end
 
+local function trim_output(output)
+  return output:gsub("%s+$", "")
+end
+
+local function run_system(cmd)
+  local output = trim_output(vim.fn.system(cmd))
+  return output, vim.v.shell_error
+end
+
+local function normalize_repo_url(url)
+  if not url or url == "" then
+    return nil
+  end
+
+  local normalized = vim.trim(url):gsub("%.git$", ""):gsub("/$", "")
+  local host, path = normalized:match("^git@([^:]+):(.+)$")
+
+  if not host then
+    host, path = normalized:match("^[%w%+%-%.]+://([^/]+)/(.+)$")
+  end
+  if not host or not path then
+    return normalized:lower()
+  end
+
+  host = host:gsub("^[^@]+@", ""):gsub(":%d+$", ""):lower()
+  path = path:gsub("^/*", ""):lower()
+
+  return host .. "/" .. path
+end
+
 local function copy_global_dict(name)
   local value = vim.g[name]
   if type(value) == "table" then
@@ -92,28 +122,130 @@ function M.rev_base(args)
   set_base(ref)
 end
 
-function M.rev_pr(args)
-  local pr_arg = args ~= "" and vim.trim(args) or ""
-  local cmd = "gh pr view"
-  if pr_arg ~= "" then
-    cmd = cmd .. " " .. vim.fn.shellescape(pr_arg)
+local function git_commit_exists(ref)
+  if not ref or ref == "" then
+    return false
   end
-  cmd = cmd .. " --json baseRefName"
 
-  local output = vim.fn.system(cmd)
-  if vim.v.shell_error ~= 0 then
-    vim.notify("RevPR: gh failed: " .. output, vim.log.levels.ERROR)
-    return
+  local _, exit_code = run_system({ "git", "cat-file", "-e", ref .. "^{commit}" })
+  return exit_code == 0
+end
+
+local function get_pr_base(pr_arg)
+  local cmd = { "gh", "pr", "view" }
+
+  if pr_arg ~= "" then
+    table.insert(cmd, pr_arg)
+  end
+
+  table.insert(cmd, "--json")
+  table.insert(cmd, "baseRefName,baseRefOid")
+
+  local output, exit_code = run_system(cmd)
+  if exit_code ~= 0 then
+    return nil, "RevPR: gh pr view failed: " .. output
   end
 
   local ok, data = pcall(vim.json.decode, output)
-  if not ok or not data or not data.baseRefName then
-    vim.notify("RevPR: failed to parse gh output", vim.log.levels.ERROR)
+  if not ok or type(data) ~= "table" then
+    return nil, "RevPR: failed to parse gh pr view output"
+  end
+  if not data.baseRefName or data.baseRefName == "" or not data.baseRefOid or data.baseRefOid == "" then
+    return nil, "RevPR: gh pr view missing baseRefName or baseRefOid"
+  end
+
+  return data
+end
+
+local function get_repo_urls()
+  local output, exit_code = run_system({ "gh", "repo", "view", "--json", "sshUrl,url" })
+  if exit_code ~= 0 then
+    return nil, "RevPR: gh repo view failed: " .. output
+  end
+
+  local ok, data = pcall(vim.json.decode, output)
+  if not ok or type(data) ~= "table" then
+    return nil, "RevPR: failed to parse gh repo view output"
+  end
+
+  local urls = {}
+  if data.sshUrl and data.sshUrl ~= "" then
+    table.insert(urls, normalize_repo_url(data.sshUrl))
+  end
+  if data.url and data.url ~= "" then
+    table.insert(urls, normalize_repo_url(data.url))
+  end
+  if #urls == 0 then
+    return nil, "RevPR: gh repo view missing repo URLs"
+  end
+
+  return urls
+end
+
+local function find_matching_remote(repo_urls)
+  local output, exit_code = run_system({ "git", "remote", "-v" })
+  if exit_code ~= 0 then
+    return nil, "RevPR: failed to list git remotes: " .. output
+  end
+
+  local candidates = {}
+  for _, url in ipairs(repo_urls) do
+    candidates[url] = true
+  end
+
+  for _, line in ipairs(vim.split(output, "\n", { trimempty = true })) do
+    local remote, url = line:match("^(%S+)%s+(%S+)")
+    if remote and url and candidates[normalize_repo_url(url)] then
+      return remote
+    end
+  end
+
+  return nil, "RevPR: repo-to-remote resolution failed: could not match GitHub repo to a local remote"
+end
+
+local function fetch_base_ref(remote, base_ref_name)
+  local output, exit_code = run_system({ "git", "fetch", remote, "refs/heads/" .. base_ref_name })
+  if exit_code ~= 0 then
+    return nil, "RevPR: git fetch failed: " .. output
+  end
+
+  return "FETCH_HEAD"
+end
+
+local function resolve_pr_base_ref(data)
+  if git_commit_exists(data.baseRefOid) then
+    return data.baseRefOid
+  end
+
+  local repo_urls, repo_err = get_repo_urls()
+  if not repo_urls then
+    return nil, repo_err
+  end
+
+  local remote, remote_err = find_matching_remote(repo_urls)
+  if not remote then
+    return nil, remote_err
+  end
+
+  return fetch_base_ref(remote, data.baseRefName)
+end
+
+function M.rev_pr(args)
+  local pr_arg = args ~= "" and vim.trim(args) or ""
+  local data, pr_err = get_pr_base(pr_arg)
+  if not data then
+    vim.notify(pr_err, vim.log.levels.ERROR)
     return
   end
 
-  local sha = vim.fn.system("git merge-base HEAD origin/" .. data.baseRefName):gsub("%s+$", "")
-  if vim.v.shell_error ~= 0 then
+  local base_ref, base_err = resolve_pr_base_ref(data)
+  if not base_ref then
+    vim.notify(base_err, vim.log.levels.ERROR)
+    return
+  end
+
+  local sha, exit_code = run_system({ "git", "merge-base", "HEAD", base_ref })
+  if exit_code ~= 0 then
     vim.notify("RevPR: git merge-base failed: " .. sha, vim.log.levels.ERROR)
     return
   end
@@ -130,18 +262,18 @@ function M.rev_diff()
 end
 
 function M.rev_files()
-  local cmd = "git diff --name-only"
+  local cmd = { "git", "diff", "--name-only" }
   if review_base ~= "" then
-    cmd = cmd .. " " .. review_base
+    table.insert(cmd, review_base)
   end
 
-  local output = vim.fn.system(cmd)
-  if vim.v.shell_error ~= 0 then
+  local output, exit_code = run_system(cmd)
+  if exit_code ~= 0 then
     vim.notify("RevFiles: git diff failed: " .. output, vim.log.levels.ERROR)
     return
   end
 
-  local files = vim.split(vim.trim(output), "\n", { trimempty = true })
+  local files = vim.split(output, "\n", { trimempty = true })
   if #files == 0 then
     vim.notify("RevFiles: no changed files")
     return
