@@ -1,10 +1,10 @@
 # gitrev.nvim
 
-A lightweight Neovim plugin for reviewing Git changes. Sets a "review base" ref and integrates with [vim-gitgutter](https://github.com/airblade/vim-gitgutter) and [vim-fugitive](https://github.com/tpope/vim-fugitive) to show diffs against it.
+A lightweight Neovim plugin for reviewing Git changes. Sets a "review base" ref and integrates with [vim-gitgutter](https://github.com/airblade/vim-gitgutter) or [vim-signify](https://github.com/mhinz/vim-signify) plus [vim-fugitive](https://github.com/tpope/vim-fugitive) to show diffs against it.
 
 ## Requirements
 
-- [vim-gitgutter](https://github.com/airblade/vim-gitgutter) — gutter signs against review base
+- [vim-gitgutter](https://github.com/airblade/vim-gitgutter) or [vim-signify](https://github.com/mhinz/vim-signify) — gutter signs and hunk jumps against review base
 - [vim-fugitive](https://github.com/tpope/vim-fugitive) — `:RevDiff` uses `Gdiffsplit`
 - [gh CLI](https://cli.github.com/) — `:RevPR` uses `gh pr view`
 
@@ -15,7 +15,10 @@ lazy.nvim:
 ```lua
 {
   "xiaocang/gitrev.nvim",
-  dependencies = { "airblade/vim-gitgutter", "tpope/vim-fugitive" },
+  dependencies = {
+    "airblade/vim-gitgutter", -- or "mhinz/vim-signify"
+    "tpope/vim-fugitive",
+  },
   config = true,
 }
 ```
@@ -50,6 +53,8 @@ lazy.nvim:
 " List all changed files in quickfix
 :RevFiles
 ```
+
+If your gutter plugin owns `]c` / `[c`, those hunk jumps will follow the current review base as well.
 
 ## Uninstall
 
