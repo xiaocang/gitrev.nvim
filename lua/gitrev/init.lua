@@ -157,6 +157,44 @@ local function get_pr_base(pr_arg)
   return data
 end
 
+local function head_is_detached()
+  local _, exit_code = run_system({ "git", "symbolic-ref", "--quiet", "HEAD" })
+  return exit_code ~= 0
+end
+
+local function query_pr_base_for_head()
+  local sha, rev_exit = run_system({ "git", "rev-parse", "HEAD" })
+  if rev_exit ~= 0 then
+    return nil, "RevPR: git rev-parse HEAD failed: " .. sha
+  end
+
+  local output, exit_code = run_system({
+    "gh", "api",
+    "repos/{owner}/{repo}/commits/" .. sha .. "/pulls",
+  })
+  if exit_code ~= 0 then
+    return nil, "RevPR: gh api commits/pulls failed: " .. output
+  end
+
+  local ok, list = pcall(vim.json.decode, output)
+  if not ok or type(list) ~= "table" then
+    return nil, "RevPR: failed to parse gh api commits/pulls output"
+  end
+
+  if #list == 0 then
+    return nil, "RevPR: no PR associated with commit " .. sha:sub(1, 7)
+  end
+
+  local pr = list[1]
+  if type(pr) ~= "table" or type(pr.base) ~= "table"
+      or not pr.base.ref or pr.base.ref == ""
+      or not pr.base.sha or pr.base.sha == "" then
+    return nil, "RevPR: gh api response missing base.ref or base.sha"
+  end
+
+  return { baseRefName = pr.base.ref, baseRefOid = pr.base.sha }
+end
+
 local function get_repo_urls()
   local output, exit_code = run_system({ "gh", "repo", "view", "--json", "sshUrl,url" })
   if exit_code ~= 0 then
@@ -232,7 +270,17 @@ end
 
 function M.rev_pr(args)
   local pr_arg = args ~= "" and vim.trim(args) or ""
-  local data, pr_err = get_pr_base(pr_arg)
+
+  local data, pr_err
+  if pr_arg == "" then
+    data, pr_err = query_pr_base_for_head()
+    if not data and not head_is_detached() then
+      data, pr_err = get_pr_base("")
+    end
+  else
+    data, pr_err = get_pr_base(pr_arg)
+  end
+
   if not data then
     vim.notify(pr_err, vim.log.levels.ERROR)
     return
